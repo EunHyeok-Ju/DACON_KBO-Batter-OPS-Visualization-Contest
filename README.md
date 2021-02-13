@@ -50,13 +50,14 @@
 
 ## 시각화
 
-![군집 결과](https://user-images.githubusercontent.com/64209837/107844613-4b81cb80-6e18-11eb-913c-434d8f6a1c2d.PNG){: width="50%" height="50%"}
+<img src="https://user-images.githubusercontent.com/64209837/107844613-4b81cb80-6e18-11eb-913c-434d8f6a1c2d.PNG" width="80%" height="80%">
 
 3개의 군집으로 매끄럽게 나뉘어져서 이 3개의 군집을 각각 Radar Chart를 통해 군짐명을 지었습니다.
 
 ### Contatct Hitter Type
 
-![cluster1](https://user-images.githubusercontent.com/64209837/107844724-6274ed80-6e19-11eb-92a2-bf4171602890.png){: width="50%" height="50%"}
+<img src="https://user-images.githubusercontent.com/64209837/107844724-6274ed80-6e19-11eb-92a2-bf4171602890.png" width="30%" height="30%">
+
 
 선구안이 중요하며, 순장타율에 비해 순출루율의 중요성이 높게 나타나는게 특징입니다.
 
@@ -64,7 +65,7 @@
 
 ### Slugger Type
 
-![cluster2](https://user-images.githubusercontent.com/64209837/107844725-63a61a80-6e19-11eb-8c8b-fe4777ca0de2.png){: width="50%" height="50%"}
+<img src="https://user-images.githubusercontent.com/64209837/107844725-63a61a80-6e19-11eb-8c8b-fe4777ca0de2.png" width="30%" height="30%">
 
 순장타율과 몸무게의 중요성이 높게 나타나는점이 특징입니다.
 
@@ -72,7 +73,7 @@
 
 ### Multi-Player Type
 
-![cluster3](https://user-images.githubusercontent.com/64209837/107844726-63a61a80-6e19-11eb-910d-da2399452840.png){: width="50%" height="50%"}
+<img src="https://user-images.githubusercontent.com/64209837/107844726-63a61a80-6e19-11eb-910d-da2399452840.png" width="30%" height="30%">
 
 어느 하나의 변수도 비중이 크게 나타나지 않지만, 모든 능력을 골고루 갖고 있는 점이 특징입니다.
 
