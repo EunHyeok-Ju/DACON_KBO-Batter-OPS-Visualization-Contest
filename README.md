@@ -114,11 +114,22 @@
 ├─Github
 │  │  README.md
 │  ├─code
-│  │      01-Crawling_Code.Rmd
-│  │      02-github-회원가입.md
+│  │      01-Crawling_Code.Rmd : 크롤링 코드
+│  │      02-Dacon 6th Visualization-시로앤마로.Rmd : 전체 코드
 │  └─data
-│          demun-001.jpg
-│          demun-002.jpg
-|  
+│         Filled.csv : 크롤링 결과
+│  └─img
+│         01_contact.jpg
+│         02_slugger.jpg
+│         03_multi.jpg
+│         cluster.PNG
+│         cluster1.png
+│         cluster2.png
+│         cluster3.png
+│         최종 결과.PNG
+│  └─result
+│         Dacon-6th-Visualization-시로앤마로.html : 최종 결과 html
+│  └─source
+|         readthedown.css : readthedown 패키지 상세 테마 설정 
 ```
 
