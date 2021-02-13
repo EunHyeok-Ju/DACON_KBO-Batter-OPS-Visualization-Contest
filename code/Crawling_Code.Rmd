@@ -1,0 +1,76 @@
+---
+title: "Crawling_Code"
+author: "SHIRONMARO"
+date: '2019-7-31'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+R에서 동적 웹페이지를 크롤링하기 위해서는 Selenium 패키지가 필요합니다.
+
+Selenium 가상화를 위해 Docker 프로그램을 사용했습니다.
+
+따라서 이 크롤링 코드는 Docker Terminal이 켜져 있으며, 몇 가지 조건을 맞췄을 때만 실행이 가능합니다.
+
+조건은 다음과 같습니다.
+
+**docker pull selenium/standalone-chrome**
+
+**docker run -d -p 4445:4444 selenium/standalone-chrome**
+
+```{r setting, eval=FALSE}
+# 조건을 따로 설정하지 않으면 코드가 실행이 되지 않아 eval=FALSE로 코드만 나타나게 처리하였습니다.
+
+library(rvest) # 웹페이지 구성
+library(RSelenium) # 셀레니움 구동
+
+## load data
+regular <- read.csv('Regular_Season_Batter.csv', fileEncoding='UTF8', stringsAsFactors=F)
+
+regular$batter_name[regular$batter_name=='윤완주'] <- '윤해진'
+df_missed <- unique(regular[regular$height.weight=="",]$batter_name)
+# 결측치입니다.
+
+## crawling
+remDr <- remoteDriver(remoteServerAddr="192.168.99.100", # 제 컴퓨터 IP주소입니다. 
+                      port=4445L,
+                      browserName="chrome")
+remDr$open()
+
+# KBO 선수조회 페이지입니다.
+remDr$navigate('https://www.koreabaseball.com/Player/Search.aspx')
+
+output <- c()
+for (i in 1:nrow(df_missed)){
+  height.weight <- NA
+  print(df_missed$batter_name[i])
+  keyword <- remDr$findElement(using='css selector', value='
+#cphContents_cphContents_cphContents_txtSearchPlayerName')
+  Sys.sleep(.3)
+  keyword$clearElement()
+  Sys.sleep(.3)
+  keyword$sendKeysToElement(list(df_missed$batter_name[i]))
+  Sys.sleep(.5)
+  button <- remDr$findElement(using='css selector', value='#cphContents_cphContents_cphContents_btnSearch')
+  Sys.sleep(.3)
+  button$clickElement()
+  Sys.sleep(.5)
+  psrc <- remDr$getPageSource()[[1]]
+  html <- read_html(psrc)
+  height.weight <- html %>% html_nodes(xpath='//*[@id="cphContents_cphContents_cphContents_udpRecord"]/div[2]/table/tbody/tr/td[6]') %>% html_text()
+  output <- append(output, height.weight)
+}
+table(is.na(output)==T)
+remDr$close()
+
+output <- gsub(', ','/',output)
+filled <- data.frame(batter_name=df_missed$batter_name,
+                     height.weight=output)
+head(filled)
+nrow(filled)
+
+write.csv(filled, 'Filled.csv', row.names=F)
+```

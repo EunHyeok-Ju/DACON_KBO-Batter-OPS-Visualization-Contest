@@ -1,0 +1,380 @@
+---
+title: "Predicting OPS for KBO Batters"
+author: "시로앤마로(이형선, 주은혁, 안지민, 이인섭)"
+date: "2019년 7월 31일"
+output: 
+  rmdformats::readthedown:
+    code_folding: hide
+    number_sections: true
+    self_contained: true
+    lightbox: true
+    gallery: true
+---
+```{r global_option, include=FALSE}
+knitr::opts_chunk$set(echo=T, comment="", message=F, warning=F)
+username <- Sys.getenv("USERNAME")
+rel_path <- paste0("C:/Users/",username,"/Desktop/SHIRONMARO/")
+setwd(rel_path)
+```
+# Introduction
+## Motivation
+
+맞으면 홈런인데 타율은 1할... MLB '특급 **공갈포**\n
+http://news.chosun.com/site/data/html_dir/2018/08/11/2018081100125.html
+
+**똑딱이** 신세 푸념하던 민병헌, 드디어 손맛 보다\n
+http://news.chosun.com/site/data/html_dir/2018/08/11/2018081100125.html
+
+**공갈포**, 파워는 준수하여 순장타율과 홈런갯수는 볼 만한 수준이나 타율 혹은 출루율이 매우 좋지 못해 실질적인 타석 생산력이 가진 파워에 비해 많이 떨어지는 선수를 가리키는 용어입니다.
+
+**똑딱이**, 야구에서 홈런을 거의 치지 못하고 단타 위주의 타격을 하는 교타자들을 얕잡아 이르는 말입니다.
+
+저희는 6회 타자별 OPS 예측 대회를 준비하면서 야구계에서 은어로 주로 사용되는 요인들을 주목했습니다.
+ 
+## Outline
+
+$$Data Massage - Feature Engineering - PCA - Clustering - Visualization - Verification$$
+
+## Settings
+
+먼저 패키지를 불러옵니다. Regular_Season_Batter 파일을 불러옵니다. 결측치가 있는 내용이 있어 KBO 홈페이지를 크롤링하여 'filled.csv' 파일로 저장하였습니다. 크롤링 코드는 별도로 첨부했습니다.
+```{r settings}
+library(rmdformats) # 기본 테마
+library(dplyr) # 전처리
+library(stringr) # 텍스트 처리
+library(NbClust) # 클러스터링
+library(ggplot2) # 시각화
+library(gridExtra) # 시각화
+library(fmsb) # 레이더 차트
+
+regular <- read.csv('Regular_Season_Batter.csv', fileEncoding='UTF8', stringsAsFactors=F)
+filled <- read.csv('Filled.csv', stringsAsFactors=F) # 크롤링으로 키/몸무게 재조사
+```
+
+## Data Cleansing & Feature Engineering
+
+저희는 순장타율(ISOP), 순출루율(ISOD), 선구안(BE)라는 파생 변수를 추가했습니다.
+
+$$순장타율(Isolated Power) = 장타율(SLG) - 타율(avg)$$
+
+$$순출루율(Isolated Discipline) = 출루율(OBP) - 타율(avg)$$
+
+$$선구안(Batting Eye) = 볼넷(BB) / (볼넷(BB) + 삼진(SO))$$
+
+보통 선구안은 [볼넷/삼진]으로 계산하지만 아래와 같은 분석 과정에서 더 나은 변수를 찾아내어 사용했습니다.
+
+```{r data cleasing}
+# 본격적인 전처리 이전에 '윤완주' 선수 '윤해진'으로 개명
+regular$batter_name[regular$batter_name=='윤완주'] <- '윤해진'
+data <- regular
+
+# height.weight가 결측되어 있는 데이터가 존재합니다.
+missed <- unique(data[data$height.weight=="",]$batter_name)
+
+# 결측치를 채워넣습니다.
+for (i in 1:nrow(filled)){
+  for (j in 1:nrow(data))
+  if (filled$batter_name[i]==data$batter_name[j]){
+    data$height.weight[j] <- filled$height.weight[i]
+  }
+}
+
+# 키/몸무게를 변형합니다.
+data$height.weight <- gsub("[c,m,k,g]","",data$height.weight)
+data$W <- substr(data$height.weight,5,7)
+data$W <- as.integer(data$W)
+
+# 순장타율(ISOP)
+data <- data %>% mutate(ISOP=SLG-avg)
+
+# 순출루율(ISOD)
+data <- data %>% mutate(ISOD=OBP-avg)
+
+# 선구안(BE)
+data <- data %>% mutate(BE_Original=BB/SO,
+                        BE_New=BB/(BB+SO))
+a <- qplot(data=data, x=BE_Original, y=OPS) + ylim(0,2)
+b <- qplot(data=data, x=BE_New, y=OPS) + ylim(0,2)
+
+grid.arrange(a,b,nrow=1,ncol=2)
+data02 <- data
+data02$BE_Original[data02$BE_Original==Inf] <- NA
+data02 <- na.omit(data02)
+
+cat('BE_Original과 OPS의 상관계수는 ', cor(data02$BE_Original, data02$OPS),'입니다.')
+cat('BE_New와 OPS의 상관계수는 ', cor(data02$BE_New, data02$OPS),'입니다.')
+
+data <- data %>% mutate(BE=BB/(BB+SO))
+```
+
+저희가 만든 새로운 BE_New 변수가 더 높은 상관성을 보여 BE_New 변수를 사용했습니다.
+
+## Finding Golden Age
+
+선수별로 경기 스타일로 유형화하기 이전에 전성기 때의 모습을 비교하고자, 가장 대표적인 성적으로 사용되는 OPS를 기준으로 전성기를 선정했습니다. 그 전에 게임 수가 충분히 나타나지 않아 판별이 불가능한 경우를 제외했습니다.
+```{r golden}
+# 게임 수가 충분히 나타나지 않는 연도를 제거하고 살펴본다.
+summary(data$G) # 1/4분위수를 기준으로 필터링합니다.
+data <- data %>% filter(G>=28)
+
+# OPS로 구분합니다.
+golden <- data %>% group_by(batter_id) %>% filter(OPS==max(OPS)) %>% arrange(batter_id)
+table(golden$batter_id)[table(golden$batter_id)>1] # 한 명당 하나씩 전성기가 입력되었다.
+```
+
+# Analysis & Modeling
+
+## Selecting Variables
+
+'공갈포'의 주요 변수로 순장타율/몸무게를, 그리고 '똑딱이'의 주요 변수로 순출루율/선구안, 그리고 평균적인 의미로 타율을 사용했습니다.
+
+```{r pca1}
+golden_final <- subset(golden, select=c(batter_id, W, BE, ISOP, ISOD, avg))
+scaled <- scale(golden_final[,-1])
+```
+
+## Principal Component Analysis
+
+PCA결과, PC3까지가 전체 분산의 약 89%를 설명합니다. Scree Plot을 살펴보면, PC3까지가 1 이상으로 나타나서 PC3까지 사용했습니다. Biplot을 살펴보면, PC1과 PC2에서 ISOP, W, avg가 강한 양의 상관관계를 가지고, BE와 ISOD 또한 강한 양의 상관관계를 가집니다. 두 그룹은 상관성을 보이지 않으므로 독립적이라 할 수 있습니다.
+```{r pca2}
+model <- prcomp(scaled)
+summary(model)
+par(mfrow=c(1,2))
+screeplot(model, type='lines', main='Scree Plot')
+biplot(model, main='Biplot')
+```
+
+## Clustering
+
+```{r nc}
+nc <- NbClust(scaled, method='kmeans')
+```
+
+NbClust 함수를 사용하여 군집의 적절한 개수를 확인한 결과, 2~3개가 적합한 것으로 나타났습니다. 
+
+```{r barplot}
+par(mfrow=c(1,1))
+barplot(table(nc$Best.n[1,]),
+        xlab="Numer of Clusters", ylab="Number of Criteria",
+        main="Number of Clusters Chosen")
+```
+
+Barplot을 살펴보고, 유형의 다양화를 위해 3개의 군집으로 클러스터링했습니다.
+
+```{r kmeans}
+set.seed(1000)
+train_kmeans <- kmeans(scaled, centers=3, iter.max=100, nstart=3)
+
+pc1 <- model$x[,1]
+pc2 <- model$x[,2]
+pc3 <- model$x[,3]
+
+cluster_df <- data.frame(PC1=pc1, PC2=pc2, PC3=pc3,
+                         cluster=factor(train_kmeans$cluster))
+
+ggplot(data=cluster_df, aes(x=PC1, y=PC2)) + 
+  geom_point(aes(color=cluster, shape=cluster), size=2, alpha=0.8) + 
+  theme_bw() + 
+  ylim(c(-5,5)) + xlim(c(-5,5)) +
+  ggtitle("clustering") +
+  theme(plot.title = element_text(hjust = 0.5,size=20,face="bold"))+
+  geom_hline(yintercept=0, linetype="dotdash", color='blue', size=0.5) +
+  geom_vline(xintercept=0, linetype="dotdash", color='blue', size=0.5)
+```
+
+3개의 군집으로 매끄럽게 나뉘어졌습니다.
+
+## Radar Chart
+
+각 군집의 특징을 Radar Chart로 표현했습니다.
+
+```{r radar chart}
+par(mfrow=c(1,3))
+colors_border=c(rgb(0.5,0.4,0.9,0.3), rgb(0.2,0.5,0.75,0.3), rgb(0.9,0.4,0.5,0.3))
+colors_in=c(rgb(0.5,0.4,0.9,0.3), rgb(0.2,0.5,0.75,0.3), rgb(0.9,0.4,0.5,0.3))
+
+radar1 <- as.data.frame(t(train_kmeans$centers[1,]))
+colnames(radar1) <- c("몸무게","선구안","순장타율","순출루율","타율")
+radar1 <- rbind(rep(2,5), rep(-2,5), radar1)
+radarchart(radar1, axistype=1,
+           pcol=colors_border[1], pfcol=colors_in[1], plwd=4, plty=1,
+           cglcol="grey", cglty=1, axislabcol="grey", caxislabels=seq(-2,2,5), cglwd=0.8, vlcex=1, title='Cluster 1. Contact Hitter Type')
+
+radar2 <- as.data.frame(t(train_kmeans$centers[2,]))
+colnames(radar2) <- c("몸무게","선구안","순장타율","순출루율","타율")
+radar2 <- rbind(rep(2,5), rep(-2,5), radar2)
+radarchart(radar2, axistype=1,
+           pcol=colors_border[2], pfcol=colors_in[2], plwd=4, plty=1,
+           cglcol="grey", cglty=1, axislabcol="grey", caxislabels=seq(-2,2,5), cglwd=0.8, vlcex=1, title='Cluster 2. Slugger Type')
+
+radar3 <- as.data.frame(t(train_kmeans$centers[3,]))
+colnames(radar3) <- c("몸무게","선구안","순장타율","순출루율","타율")
+radar3 <- rbind(rep(2,5), rep(-2,5), radar3)
+radarchart(radar3, axistype=1,
+           pcol=colors_border[3], pfcol=colors_in[3], plwd=4, plty=1,
+           cglcol="grey", cglty=1, axislabcol="grey", caxislabels=seq(-2,2,5), cglwd=0.8, vlcex=1, title='Cluster 3. Multi-Player Type')
+```
+
+### Cluster 1. Contact Hitter Type\n
+선구안이 중요하며, 순장타율에 비해 순출루율의 중요성이 높게 나타나는 **컨택트 히터형**입니다. 성적이 좋지 않은 경우 **'똑딱이'**라고 얕잡아 표현합니다.
+
+### Cluster 2. Slugger Type\n
+순장타율과 몸무게의 중요성이 높게 나타나는 **슬러거형**입니다. 성적이 좋지 않은 경우 **'공갈포'**라고 얕잡아 표현합니다.
+
+### Cluster 3. Multi-Player Type\n
+선구안의 비중이 어느 하나의 변수도 비중이 크게 나타나지 않는 **멀티 플레이어형**입니다.
+
+
+# Verification
+
+## Finding Fittest Player
+
+각 군집의 가장 좋은 예시는 각 군집의 평균에 가장 가까운 데이터로 선정했습니다.
+
+```{r find}
+cluster_df <- cbind(golden_final$batter_id, cluster_df)
+colnames(cluster_df)[1] <- 'batter_id'
+
+clst01 <- subset(cluster_df, cluster==1)
+clst02 <- subset(cluster_df, cluster==2)
+clst03 <- subset(cluster_df, cluster==3)
+
+finder <- function(clst){
+  core <- c(mean(clst$PC1), mean(clst$PC2))
+  df_id <- c();df_dist <- c()
+  for (i in 1:nrow(clst)){
+    dist <- sqrt((clst$PC1[i]-core[1])^2+(clst$PC2[i]-core[2])^2)
+    df_id <- append(df_id, clst$batter_id[i])
+    df_dist <- append(df_dist, dist)
+  }
+  table <- data.frame(id=df_id, dist=df_dist) %>% arrange(df_dist)
+  id <- table$id[1]
+  cat('군집',clst$cluster[1],' 의 대표 batter_id는',id,'입니다.')
+}
+finder(clst01);finder(clst02);finder(clst03)
+```
+
+## Who's the Player?
+
+### Contact Hitter Type
+```{r batter1.1, echo=TRUE}
+scaled <- as.data.frame(scaled)
+scaled_id <- data.frame(batter_id=golden$batter_id,
+                        batter_name=golden$batter_name,
+                        W=scaled$W,
+                        BE=scaled$BE,
+                        ISOP=scaled$ISOP,
+                        ISOD=scaled$ISOD,
+                        avg=scaled$avg)
+
+batter1 <- subset(scaled_id, batter_id==72, select=c(batter_name,W,BE,ISOP,ISOD,avg))
+batter1_2 <- rbind(rep(2,5), rep(-2,5), batter1[1,-1])
+batter1_2 <- as.data.frame(batter1_2)
+radarchart(batter1_2, axistype=1,
+           pcol=colors_border[1], pfcol=colors_in[1], plwd=4, plty=1,
+           cglcol="grey", cglty=1, axislabcol="grey", caxislabels=seq(-2,2,5), cglwd=0.8,
+           vlcex=0.8, title=paste0(batter1$batter_name,' 선수의 스탯 분포도')
+)
+```
+
+<div class = "row">
+<div class = "col-md-3">
+```{r batter1.2, echo=FALSE, out.width='100%'}
+knitr::include_graphics("01_contact.jpg")
+```
+</div>
+<div class = "col-md-9">
+선수명 : 김헌곤  
+키/몸무게 : 174cm/81kg  
+소속 : 삼성  
+활동 : 2011 ~ 현재  
+*"운동선수로 뛰어난 체격은 아니지만, 타격 밸런스가 좋고 나름 정교하며, 장타 부문에서도 거포까지는 아니지만 두자리 수 홈런 정도는 터트려줄 수 있는 타자이다. 특히 득점권 상황에서 높은 집중력을 보여주는 편이다. 그래서 2018년의 경우에는 타율과 홈런에 비하여 타점을 많이 거두었다."*  
+[출처] https://namu.wiki/w/%EA%B9%80%ED%97%8C%EA%B3%A4
+
+</div>
+</div>
+
+김헌곤 선수는 선구안이 굉장히 좋은 '컨택트 히터'입니다. 몸무게가 가벼우며, 훌륭한 선구안을 바탕으로 높은 순출루율을 보입니다. 이 선수만의 특징으로는 다른 선수에 비해 절대적으로 높은 수치의 순장타율을 보입니다.
+
+### Slugger Type
+```{r batter2.1, echo=TRUE}
+batter2 <- subset(scaled_id, batter_id==155, select=c(batter_name,W,BE,ISOP,ISOD,avg))
+batter2_2 <- rbind(rep(2,5), rep(-2,5), batter2[1,-1])
+batter2_2 <- as.data.frame(batter2_2)
+radarchart(batter2_2, axistype=1,
+           pcol=colors_border[2], pfcol=colors_in[2], plwd=4, plty=1,
+           cglcol="grey", cglty=1, axislabcol="grey", caxislabels=seq(-2,2,5), cglwd=0.8,
+           vlcex=0.8, title=paste0(batter2$batter_name,' 선수의 스탯 분포도')
+)
+```
+
+<div class = "row">
+<div class = "col-md-3">
+
+```{r batter2.2, echo=FALSE, out.width='100%'}
+knitr::include_graphics("02_slugger.jpg")
+```
+
+</div>
+<div class = "col-md-9">
+
+선수명 : 송지만  
+키/몸무게 : 178cm/85kg  
+소속 : 넥센  
+활동 : 1996 ~ 2014  
+*"언제나 일정 이상의 성적을 내주는 꾸준함이 송지만의 장점이다. 홈런왕을 차지하거나 40홈런 이상을 넘긴 적은 없지만 20홈런 이상을 7번이나 기록했고 부상으로 74경기밖에 출장 못 했던 2003년을 제외하면 2010년까지 데뷔 이후 매 시즌 두 자리 수 홈런을 기록했다.덕분에 누구에게나 회자될법한 시즌이 없음에도 통산 기록은 이미 레전드급."*  
+[출처] https://namu.wiki/w/%EC%86%A1%EC%A7%80%EB%A7%8C
+
+</div>
+</div>
+
+송지만 선수는 기본적으로 매우 좋은 성적을 보이는 '슬러거'입니다. 선구안과 타율 또한 높게 나타나지만 역시 매우 높은 순장타율을 주목할 만합니다. 이 선수만의 특징으로는 체격이 다른 슬러거형에 비해 뛰어나지 않지만 '거포'의 스타일을 보입니다.
+
+### Multi-Player Type
+
+```{r batter3.1, echo=TRUE}
+batter3 <- subset(scaled_id, batter_id==106, select=c(batter_name,W,BE,ISOP,ISOD,avg))
+batter3_2 <- rbind(rep(2,5), rep(-2,5), batter3[1,-1])
+batter3_2 <- as.data.frame(batter3_2)
+radarchart(batter3_2, axistype=1,
+           pcol=colors_border[3], pfcol=colors_in[3], plwd=4, plty=1,
+           cglcol="grey", cglty=1, axislabcol="grey", caxislabels=seq(-2,2,5), cglwd=0.8,
+           vlcex=0.8, title=paste0(batter3$batter_name,' 선수의 스탯 분포도')
+)
+```
+
+<div class = "row">
+<div class = "col-md-3">
+
+```{r batter3.2, echo=FALSE, out.width='100%'}
+knitr::include_graphics("03_multi.jpg")
+```
+
+</div>
+<div class = "col-md-9">
+
+선수명 : 박계현  
+키/몸무게 : 181cm/75kg  
+소속 : SK  
+활동 : 2011 ~ 2018  
+*"내야 멀티 포지션을 전부 맡을 수 있고, 빠른 발 덕분에 넓은 수비 커버가 가능하며, 1, 2군 통틀어 팀 내 최고 주력을 자랑하고, 100ｍ를 11초 30만에 주파한다는 장점이 있다. 대주자 스페셜리스트인 김재현보다 빠르다고 자부할 정도다 ...2019년 4월 15일 소집해제 후 팀에 복귀할 예정이었으나, 전역을 앞두고 방출 통보를 받았다...그래도 준족의 군필 내야 유틸리티 플레이어인 만큼 새 팀을 찾을 수도 있을 것으로 보인다."*  
+[출처] https://namu.wiki/w/%EB%B0%95%EA%B3%84%ED%98%84
+
+</div>
+</div>
+
+박계현 선수는 선구안, 순장타율, 순출루율이 비슷한 수치로 나타나는 '멀티 플레이어'입니다. 이 선수만의 특징으로는 상대적으로 높은 타율을 보입니다.
+
+# Conclusion
+
+## Significance
+
+1) 선수별 플레이 스타일을 유형화하여 데이터를 바탕으로 선수의 성장 방향성을 파악할 수 있다.
+
+2) 타순 배치, 선수 영입, 수비 포메이션 등 다각도로 유형 정보를 활용할 수 있다.
+
+## Threshold
+
+1) 전성기를 OPS로만 판단하여 각 선수의 특장점이 드러나는 성적(WAR,체력 등)을 개인별로 파악하지 못했다는 한계가 있다.
+
+2) 2010년 이전의 프로야구 과거 데이터 및 2군 데이터를 추가하여 표본 크기를 늘린다면 더 정교한 군집화가 이뤄질 것이라 예상된다.
